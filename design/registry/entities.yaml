@@ -1,0 +1,389 @@
+# Entity registry — cross-system facts locked by the GDD that owns them.
+# Values here must not be silently contradicted by a later GDD; a conflict
+# should surface explicitly during that system's design-system pass.
+
+entities:
+  - name: jwt_token_ttl
+    type: constant
+    value: 7 days
+    source: account-auth
+    referenced_by: []
+
+  - name: bcrypt_cost_factor
+    type: constant
+    value: 10
+    source: account-auth
+    referenced_by: []
+
+  - name: username_constraints
+    type: constant
+    length: "3-20"
+    charset: "alphanumeric + underscore"
+    source: account-auth
+    referenced_by: []
+
+  - name: password_min_length
+    type: constant
+    value: 6 characters
+    source: account-auth
+    referenced_by: []
+
+  - name: reconnect_backoff
+    type: formula
+    variables: [base_backoff, attempt, max_backoff]
+    output_range: "2s-60s"
+    source: save-persistence
+    referenced_by: [analytics-event-tracking]
+
+  - name: analytics_batch_size
+    type: constant
+    value: 20 events
+    source: analytics-event-tracking
+    referenced_by: []
+
+  - name: analytics_flush_interval
+    type: constant
+    value: 30 seconds
+    source: analytics-event-tracking
+    referenced_by: []
+
+  - name: analytics_buffer_cap
+    type: constant
+    value: 500 events (FIFO-drop-oldest)
+    source: analytics-event-tracking
+    referenced_by: []
+
+  - name: coin_credit
+    type: formula
+    variables: [collected_amount, flat_amount, coin_value_upgrade_level]
+    output_range: "multiplied path: collected_amount to 5x collected_amount; flat path: flat_amount unmultiplied"
+    source: currency-system
+    referenced_by: [anti-cheat-replay-verification]
+    revised: "2026-07-09 — was a single raw_amount path that could double-apply to flat bonuses (fixed by review-all-gdds)"
+
+  - name: starting_balance
+    type: constant
+    value: "0 coins, 0 gems"
+    source: currency-system
+    referenced_by: []
+
+  - name: replay_match
+    type: formula
+    variables: [server_simulated_value, client_reported_value, tolerance_units]
+    output_range: "boolean match/mismatch"
+    source: anti-cheat-replay-verification
+    referenced_by: []
+
+  - name: tolerance_units
+    type: constant
+    value: 2
+    source: anti-cheat-replay-verification
+    referenced_by: []
+
+  - name: mismatch_escalation_threshold
+    type: constant
+    value: "3 flags within 7 days"
+    source: anti-cheat-replay-verification
+    referenced_by: []
+
+  - name: navigation_debounce
+    type: constant
+    value: 300ms
+    source: shared-hub
+    referenced_by: []
+
+  - name: boss_hp
+    type: formula
+    variables: [level]
+    output_range: "800 base, +650/level through level 11, +200/level through level 30, hard-capped at 11,100 from level 30 onward"
+    source: level-difficulty-config-ricochet
+    referenced_by: []
+    revised: "2026-07-09 (twice) — was unbounded linear (+650/level forever), diverged from the board's capped substrate and made late-game unwinnable; first fix (decelerate) was mitigation-only per independent re-verification, second fix (hard cap at level 30) is a structural guarantee; exact cap level/value still need balance-check validation"
+
+  - name: initial_rows
+    type: formula
+    variables: [level]
+    output_range: "4-8, caps at level 9"
+    source: level-difficulty-config-ricochet
+    referenced_by: []
+
+  - name: max_brick_hp
+    type: formula
+    variables: [level]
+    output_range: "6 (level 1), +4 per level, unbounded"
+    source: level-difficulty-config-ricochet
+    referenced_by: []
+
+  - name: spawn_density
+    type: formula
+    variables: [level]
+    output_range: "0.45-0.75, caps at level 11"
+    source: level-difficulty-config-ricochet
+    referenced_by: []
+
+  - name: starting_balls
+    type: formula
+    variables: [level, extra_balls_upgrade_level]
+    output_range: "3+ (level growth) + 0-5 (upgrade)"
+    source: level-difficulty-config-ricochet
+    referenced_by: []
+
+  - name: boss_roster
+    type: constant
+    value: "6-entry fixed name list, cycles via level mod 6"
+    source: level-difficulty-config-ricochet
+    referenced_by: []
+
+  - name: ball_speed
+    type: formula
+    variables: [cell_size]
+    output_range: "11x cell_size"
+    source: super-ricochet
+    referenced_by: []
+
+  - name: ball_radius
+    type: formula
+    variables: [cell_size]
+    output_range: "0.15x cell_size"
+    source: super-ricochet
+    referenced_by: []
+
+  - name: min_vertical_velocity
+    type: formula
+    variables: [ball_speed]
+    output_range: "0.22x ball_speed"
+    source: super-ricochet
+    referenced_by: []
+
+  - name: brick_hp_roll
+    type: formula
+    variables: ["random()", max_brick_hp]
+    output_range: "weighted toward low values via pow(random,1.6)"
+    source: super-ricochet
+    referenced_by: []
+
+  - name: coin_spawn_chance
+    type: constant
+    value: "0.14 per row, max 1"
+    source: super-ricochet
+    referenced_by: []
+
+  - name: powerup_spawn_chance
+    type: constant
+    value: "0.05 per row"
+    source: super-ricochet
+    referenced_by: []
+
+  - name: boss_hp_bar_tween_duration
+    type: constant
+    value: "0.12s linear"
+    source: ricochet-hud
+    referenced_by: []
+
+  - name: local_cache_staleness_threshold
+    type: constant
+    value: 5 minutes
+    source: save-persistence
+    referenced_by: []
+
+  - name: queued_action_max_age
+    type: constant
+    value: 24 hours
+    source: save-persistence
+    referenced_by: []
+
+  - name: collection_completion_percent
+    type: formula
+    variables: [owned_count, total_roster_count]
+    output_range: "0-100%"
+    source: mascot-database
+    referenced_by: []
+
+  - name: progression_gate_level
+    type: formula
+    variables: [tier]
+    output_range: "lookup, not a curve: common=[3,6], rare=[15,20]"
+    source: mascot-database
+    referenced_by: []
+
+  - name: mastery_repeat_gap
+    type: constant
+    value: "+12 levels (guarantees 2 boss cycles, since bosses cycle on level mod 6)"
+    source: mascot-database
+    referenced_by: []
+
+  - name: mvp_mascot_roster_size
+    type: constant
+    value: 16
+    source: mascot-database
+    referenced_by: []
+
+  - name: mascot_rarity_tiers
+    type: constant
+    value: "Common / Rare / Epic (3 tiers); colors owned by art-bible (Fern Green=Common, Amethyst Purple=Rare+Epic, distinguished by star-count/border-thickness not hue)"
+    source: mascot-database
+    referenced_by: []
+
+  - name: mascot_milestone_taxonomy
+    type: constant
+    value: "First Contact / Progression Gates / Mastery Repeats / Consistency Streaks / Capstone (5 categories)"
+    source: mascot-database
+    referenced_by: []
+
+  - name: obstacleSpeed
+    type: formula
+    variables: [t]
+    output_range: "250 (t=0), +50 every 5s, unbounded"
+    source: obstacle-spawn-difficulty-ramp-runner
+    referenced_by: []
+
+  - name: spawnInterval
+    type: formula
+    variables: [t]
+    output_range: "1.5s (t=0) decaying linearly to a 0.6s floor, reached at t=27s"
+    source: obstacle-spawn-difficulty-ramp-runner
+    referenced_by: []
+
+  - name: maxPlausibleScore
+    type: formula
+    variables: [t, "N(t)"]
+    output_range: "unbounded; Anti-Cheat Tier-1 ceiling, coin-maximizing upper bound (25 x N(t) for t<75)"
+    source: obstacle-spawn-difficulty-ramp-runner
+    referenced_by: [anti-cheat-replay-verification]
+
+  - name: runner_obstacle_type_mix
+    type: constant
+    value: "coin=18%, bomb=24%, bird=26%, cloud=32%"
+    source: obstacle-spawn-difficulty-ramp-runner
+    referenced_by: []
+
+  - name: runner_health
+    type: constant
+    value: "1 (any single non-coin collision ends the run)"
+    source: obstacle-spawn-difficulty-ramp-runner
+    referenced_by: [quack-runner]
+
+  - name: dodge_bonus
+    type: formula
+    variables: [t]
+    output_range: "10 (t<5), +1 per 5s elapsed, unbounded; awarded per successfully-dodged non-coin obstacle"
+    source: quack-runner
+    referenced_by: []
+
+  - name: runner_leaderboard_score
+    type: formula
+    variables: [coinsCollected, "t_i (per dodge)"]
+    output_range: "coinsCollected x 25 + sum of dodge_bonus(t_i); leaderboard-facing only, NEVER used for currency credit"
+    source: quack-runner
+    referenced_by: []
+
+  - name: runner_coin_credit
+    type: constant
+    value: "coinsCollected credits 1:1 base via Currency System's creditMultiplied leg (shares Ricochet's Coin Value up-to-5x multiplier); dodge bonus is NEVER credited as currency"
+    source: quack-runner
+    referenced_by: [currency-system]
+
+  - name: currency_ledger_retention
+    type: constant
+    value: "forever — no pruning, no default archival window; audit trail for a server-authoritative, real-money economy"
+    source: currency-ledger-transaction-log
+    referenced_by: []
+
+  - name: ledger_query_page_size
+    type: constant
+    value: "getPlayerLedger default 50 rows, hard cap 500 rows (requests above cap are clamped, never rejected)"
+    source: currency-ledger-transaction-log
+    referenced_by: []
+
+  - name: ledger_reconciliation_date_range_cap
+    type: constant
+    value: "getReconciliationSummary: 1 year per call maximum (requests exceeding this are rejected with an explicit error, never silently clamped)"
+    source: currency-ledger-transaction-log
+    referenced_by: []
+
+  - name: daily_quest_targets_rewards
+    type: constant
+    value: "bricks destroyed: target 50 -> 50 coins flat; coins collected: target 20 -> 80 coins flat; runs completed: target 3 -> 45 coins flat; bosses defeated: target 1 -> 100 coins + 1 gem flat. All routed via Currency System's creditFlat leg, never creditMultiplied."
+    source: daily-quests
+    referenced_by: []
+
+  - name: daily_quest_count
+    type: constant
+    value: "3 quests/day, drawn without repeat from 4 types"
+    source: daily-quests
+    referenced_by: []
+
+  - name: daily_quest_reroll_count
+    type: constant
+    value: "1 free reroll/day; swaps the rerolled slot's type for the single type omitted from that day's original 3-of-4 draw (preserves no-repeat)"
+    source: daily-quests
+    referenced_by: []
+
+  - name: daily_quest_reset_cadence
+    type: constant
+    value: "UTC midnight; unclaimed quests (including Complete-Unclaimed) are forfeited, not carried over"
+    source: daily-quests
+    referenced_by: []
+
+  - name: streak_reward_formula
+    type: formula
+    variables: [streakCount]
+    output_range: "coins = 40 + min(streakCount,10)x15 (55-190, flat past day 10); gems = 2 if streakCount mod 7 == 0 else 0. Both via Currency System's creditFlat leg, never creditMultiplied."
+    source: login-streak
+    referenced_by: []
+
+  - name: streak_reset_condition
+    type: constant
+    value: "a missed UTC calendar day resets streakCount to 0, then immediately to 1 on the triggering login (never a bare 0 state); no make-up/grace mechanic in initial scope"
+    source: login-streak
+    referenced_by: []
+
+  - name: mascot_equip_default
+    type: constant
+    value: "fixed non-mascot placeholder icon shown until the player's first mascot_unlocked event, which auto-equips that mascot; every unlock after the first requires a manual equip"
+    source: mascot-gallery-equip-ui
+    referenced_by: []
+
+  - name: mascot_equip_multi_grant_tiebreak
+    type: constant
+    value: "when one transaction grants 2+ mascots simultaneously, auto-equip targets the highest-rarity granted mascot, tie-broken by alphabetical mascot name if still tied"
+    source: mascot-gallery-equip-ui
+    referenced_by: []
+
+  - name: runner_death_shake_magnitude
+    type: constant
+    value: "5px default (down from the quack-blaster prototype's raw 14px) -- unplaytested structural placeholder, pending /balance-check before lock"
+    source: runner-hud
+    referenced_by: []
+
+  - name: runner_max_backgrounded_duration
+    type: constant
+    value: "120 seconds wall-clock, measured at OnApplicationPause(false) before unfreezing the sim tick; exceeding it auto-forfeits the run (GameOver, uncredited) -- resource hygiene, not an anti-cheat requirement"
+    source: runner-hud
+    referenced_by: []
+
+  - name: ricochet_leaderboard_score
+    type: formula
+    variables: [levelReached, bossesDefeated]
+    output_range: "(levelReached x 100,000) + min(bossesDefeated, 99,999); leaderboard-facing only, NEVER used for currency credit"
+    source: super-ricochet
+    referenced_by: [leaderboard]
+    revised: "2026-07-12 -- originally drafted in leaderboard.md, backported to super-ricochet.md during CD-GDD-ALIGN review so this mini-game owns its own leaderboard-facing score, matching runner_leaderboard_score's ownership pattern"
+
+  - name: leaderboard_top_n
+    type: constant
+    value: 20
+    source: leaderboard
+    referenced_by: []
+
+  - name: leaderboard_tiebreak
+    type: constant
+    value: "identical scores rank by earliest achieved_at server timestamp, then lowest player_id as a final deterministic tiebreak"
+    source: leaderboard
+    referenced_by: []
+
+  - name: leaderboard_scores_schema
+    type: constant
+    value: "leaderboard_scores(player_id, game_id, score, achieved_at, display_stats JSONB) with composite index (game_id, score DESC, achieved_at ASC, player_id ASC); a generic per-game table, not dedicated columns, since new mini-games are data-only events under this shape; requires a not-yet-authored ADR-0005 addendum, including extending its canonical lock order and idempotency gating to this table as a third transaction leg alongside player_state and wallet"
+    source: leaderboard
+    referenced_by: []

@@ -1,0 +1,217 @@
+{
+  ".claude/docs/technical-preferences.md": {
+    "mtime": 1783587309.9871566,
+    "ast_hash": "df3deab102a9d947faebb1ab790700be",
+    "semantic_hash": "df3deab102a9d947faebb1ab790700be"
+  },
+  "CLAUDE.md": {
+    "mtime": 1783549759.555063,
+    "ast_hash": "7cbceae9cca5b1193c50428d8b1168e7",
+    "semantic_hash": "7cbceae9cca5b1193c50428d8b1168e7"
+  },
+  "design/art/art-bible.md": {
+    "mtime": 1783655532.9641986,
+    "ast_hash": "f5d568cf91b15c83ce890588e00e3319",
+    "semantic_hash": "f5d568cf91b15c83ce890588e00e3319"
+  },
+  "design/gdd/account-auth.md": {
+    "mtime": 1783592894.6795447,
+    "ast_hash": "a476c381f2ef3b1e4810575760b40096",
+    "semantic_hash": "a476c381f2ef3b1e4810575760b40096"
+  },
+  "design/gdd/analytics-event-tracking.md": {
+    "mtime": 1783607807.1295881,
+    "ast_hash": "5f3375edd01ca03592de3f2329e7a1c5",
+    "semantic_hash": "5f3375edd01ca03592de3f2329e7a1c5"
+  },
+  "design/gdd/anti-cheat-replay-verification.md": {
+    "mtime": 1783611104.3416226,
+    "ast_hash": "159a40e0ceb31c7975cf978a36fb51d4",
+    "semantic_hash": "159a40e0ceb31c7975cf978a36fb51d4"
+  },
+  "design/gdd/boss-ai-damage-model.md": {
+    "mtime": 1783637461.9805527,
+    "ast_hash": "e7b43d037bbb8d504f30e15f313e5e63",
+    "semantic_hash": "e7b43d037bbb8d504f30e15f313e5e63"
+  },
+  "design/gdd/currency-system.md": {
+    "mtime": 1783637485.7177298,
+    "ast_hash": "42beff5d6e50b3e14856eb1446dfe115",
+    "semantic_hash": "42beff5d6e50b3e14856eb1446dfe115"
+  },
+  "design/gdd/game-concept.md": {
+    "mtime": 1783644505.5849626,
+    "ast_hash": "78da807933f9f9b69b2c88d618e2c3e9",
+    "semantic_hash": "78da807933f9f9b69b2c88d618e2c3e9"
+  },
+  "design/gdd/gdd-cross-review-2026-07-09-addendum.md": {
+    "mtime": 1783611658.215466,
+    "ast_hash": "658c1b02c013f1e31fd9cca11f01d77b",
+    "semantic_hash": "658c1b02c013f1e31fd9cca11f01d77b"
+  },
+  "design/gdd/gdd-cross-review-2026-07-09-full-rerun.md": {
+    "mtime": 1783637645.9557788,
+    "ast_hash": "bc46444d63e22fc6979290dd95ab8c30",
+    "semantic_hash": "bc46444d63e22fc6979290dd95ab8c30"
+  },
+  "design/gdd/gdd-cross-review-2026-07-09.md": {
+    "mtime": 1783610381.9673321,
+    "ast_hash": "61fc15ee4eab7462b3dc12a72e6bd8d6",
+    "semantic_hash": "61fc15ee4eab7462b3dc12a72e6bd8d6"
+  },
+  "design/gdd/hub-ui.md": {
+    "mtime": 1783609647.630055,
+    "ast_hash": "4ae0a5bc704875265985d9cc9fa02028",
+    "semantic_hash": "4ae0a5bc704875265985d9cc9fa02028"
+  },
+  "design/gdd/level-difficulty-config-ricochet.md": {
+    "mtime": 1783637621.001511,
+    "ast_hash": "d3fbb26243776283fb4c739268009d77",
+    "semantic_hash": "d3fbb26243776283fb4c739268009d77"
+  },
+  "design/gdd/ricochet-hud.md": {
+    "mtime": 1783609698.18444,
+    "ast_hash": "038348a297ce806480936f5f58c47d86",
+    "semantic_hash": "038348a297ce806480936f5f58c47d86"
+  },
+  "design/gdd/save-persistence.md": {
+    "mtime": 1783610626.1338766,
+    "ast_hash": "53e986540f0d2997876bc43d9803bc29",
+    "semantic_hash": "53e986540f0d2997876bc43d9803bc29"
+  },
+  "design/gdd/shared-hub.md": {
+    "mtime": 1783608770.469007,
+    "ast_hash": "8189d67080562747a969900594fb46c4",
+    "semantic_hash": "8189d67080562747a969900594fb46c4"
+  },
+  "design/gdd/super-ricochet.md": {
+    "mtime": 1783637517.727332,
+    "ast_hash": "21c4169e67966d161bce1c815f3e540a",
+    "semantic_hash": "21c4169e67966d161bce1c815f3e540a"
+  },
+  "design/gdd/systems-index.md": {
+    "mtime": 1783637628.5913205,
+    "ast_hash": "02be678c00c2ce2cf5bddefd54a5bd7e",
+    "semantic_hash": "02be678c00c2ce2cf5bddefd54a5bd7e"
+  },
+  "design/registry/entities.yaml": {
+    "mtime": 1783611326.4376316,
+    "ast_hash": "a39118947da0ffef48d146199571b23c",
+    "semantic_hash": "a39118947da0ffef48d146199571b23c"
+  },
+  "docs/architecture/adr-0001-deterministic-rng-replay-strategy.md": {
+    "mtime": 1783710001.3380163,
+    "ast_hash": "d2a9cb5338ab1d895d71ee03f3adb9b0",
+    "semantic_hash": "d2a9cb5338ab1d895d71ee03f3adb9b0"
+  },
+  "docs/architecture/adr-0002-deterministic-fixedpoint-physics.md": {
+    "mtime": 1783687800.8612244,
+    "ast_hash": "fdb423c45c3dc27f94b83381cd960620",
+    "semantic_hash": "fdb423c45c3dc27f94b83381cd960620"
+  },
+  "docs/architecture/adr-0002-super-ricochet-physics-api.md": {
+    "mtime": 1783687616.692196,
+    "ast_hash": "d0476d2edc92c7e6c562025d4f45fc87",
+    "semantic_hash": "d0476d2edc92c7e6c562025d4f45fc87"
+  },
+  "docs/architecture/adr-0003-secure-token-storage.md": {
+    "mtime": 1783688315.571514,
+    "ast_hash": "e15751a86c5ac1363ace3be16d00991d",
+    "semantic_hash": "e15751a86c5ac1363ace3be16d00991d"
+  },
+  "docs/architecture/adr-0004-currency-atomic-credit-debit.md": {
+    "mtime": 1783688807.1228392,
+    "ast_hash": "99a84bdf3fea71b6ca923e26af4d720f",
+    "semantic_hash": "99a84bdf3fea71b6ca923e26af4d720f"
+  },
+  "docs/architecture/adr-0005-server-persistence-postgres.md": {
+    "mtime": 1783689228.7260196,
+    "ast_hash": "296cbb11a3781624f907db03f4262b3b",
+    "semantic_hash": "296cbb11a3781624f907db03f4262b3b"
+  },
+  "docs/architecture/adr-0006-analytics-buffer-flush.md": {
+    "mtime": 1783709342.8163624,
+    "ast_hash": "6b35f7c6871debb573d0c3cb60d765a9",
+    "semantic_hash": "6b35f7c6871debb573d0c3cb60d765a9"
+  },
+  "docs/architecture/adr-0007-replay-resimulation-service.md": {
+    "mtime": 1783709951.9703305,
+    "ast_hash": "0d24ec0b52b29ce40b1c4625dcf69260",
+    "semantic_hash": "0d24ec0b52b29ce40b1c4625dcf69260"
+  },
+  "docs/architecture/adr-0008-ui-system-ugui.md": {
+    "mtime": 1783713709.3226492,
+    "ast_hash": "35e882b000da9581dea441bf84991e10",
+    "semantic_hash": "35e882b000da9581dea441bf84991e10"
+  },
+  "docs/architecture/adr-0009-shared-hub-navigation.md": {
+    "mtime": 1783714206.972606,
+    "ast_hash": "e29c544c009685285cac4505d99c1357",
+    "semantic_hash": "e29c544c009685285cac4505d99c1357"
+  },
+  "docs/architecture/adr-0010-client-cache-offline-queue.md": {
+    "mtime": 1783714602.832034,
+    "ast_hash": "3bdd36e5448a384fd240cd7c4debb43f",
+    "semantic_hash": "3bdd36e5448a384fd240cd7c4debb43f"
+  },
+  "docs/architecture/adr-0011-boss-damage-events.md": {
+    "mtime": 1783715579.7858472,
+    "ast_hash": "8bd5c70c785ef2c3672dfefdc7f65121",
+    "semantic_hash": "8bd5c70c785ef2c3672dfefdc7f65121"
+  },
+  "docs/architecture/architecture.md": {
+    "mtime": 1783656919.3163161,
+    "ast_hash": "17a844fb365de81e990b092d97b0a26f",
+    "semantic_hash": "17a844fb365de81e990b092d97b0a26f"
+  },
+  "docs/engine-reference/unity/VERSION.md": {
+    "mtime": 1783550861.2998052,
+    "ast_hash": "d3a391e6ec3c5ff71b95f0b6d1bdb662",
+    "semantic_hash": "d3a391e6ec3c5ff71b95f0b6d1bdb662"
+  },
+  "docs/engine-reference/unity/breaking-changes.md": {
+    "mtime": 1783550900.0423021,
+    "ast_hash": "84daba5f84bde59c0f52a9f64fbaea93",
+    "semantic_hash": "84daba5f84bde59c0f52a9f64fbaea93"
+  },
+  "docs/engine-reference/unity/current-best-practices.md": {
+    "mtime": 1783550962.6804914,
+    "ast_hash": "ae9f73af99dc341d0b5289675333e482",
+    "semantic_hash": "ae9f73af99dc341d0b5289675333e482"
+  },
+  "docs/engine-reference/unity/deprecated-apis.md": {
+    "mtime": 1783550925.2607095,
+    "ast_hash": "de601f18cf7ee1a1543340b13ad009a4",
+    "semantic_hash": "de601f18cf7ee1a1543340b13ad009a4"
+  },
+  "docs/registry/architecture.yaml": {
+    "mtime": 1783715843.5092626,
+    "ast_hash": "fbb0bb9c8cd969f26850f277bdf42443",
+    "semantic_hash": "fbb0bb9c8cd969f26850f277bdf42443"
+  },
+  "production/gate-checks/systems-design-to-technical-setup-2026-07-09.md": {
+    "mtime": 1783611639.186549,
+    "ast_hash": "85b3c7fba5d50088e34f1bf89e22f19b",
+    "semantic_hash": "85b3c7fba5d50088e34f1bf89e22f19b"
+  },
+  "production/project-stage-report.md": {
+    "mtime": 1783587698.5169044,
+    "ast_hash": "68acff4694b212fdf755290e2913544c",
+    "semantic_hash": "68acff4694b212fdf755290e2913544c"
+  },
+  "production/review-mode.txt": {
+    "mtime": 1783549497.669141,
+    "ast_hash": "dfbfc09aef387eeaf7158f8bb8c0be31",
+    "semantic_hash": "dfbfc09aef387eeaf7158f8bb8c0be31"
+  },
+  "production/session-state/active.md": {
+    "mtime": 1783714632.5639985,
+    "ast_hash": "4ded9130b759fb54b0b39e02bae2bc4c",
+    "semantic_hash": "4ded9130b759fb54b0b39e02bae2bc4c"
+  },
+  "production/stage.txt": {
+    "mtime": 1783549268.1452014,
+    "ast_hash": "b9b26225661a69a310f2b3182d4946e7",
+    "semantic_hash": "b9b26225661a69a310f2b3182d4946e7"
+  }
+}

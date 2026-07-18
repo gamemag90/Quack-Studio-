@@ -1,0 +1,947 @@
+# Architecture Registry
+# Locked architectural stances established by accepted/proposed ADRs.
+# New ADRs must check this file (Step 3a of /architecture-decision) before
+# proposing a conflicting approach.
+
+state_ownership:
+  - state: ball_position_and_velocity
+    owned_by: SharedSimCore (IDeterministicPhysics2D)
+    established_by: ADR-0002
+    note: >
+      Unity Rigidbody2D/Collider2D is NOT the authority — it is driven
+      kinematically from SharedSimCore for VISUAL rendering only. The scored,
+      replayed trajectory lives entirely in SharedSimCore's fixed-point sim.
+
+  - state: wallet_balance (coins, gems)
+    owned_by: Currency System (server-side mutateWallet chokepoint)
+    established_by: ADR-0004
+    note: >
+      No system writes coins/gems directly — all mutation goes through
+      mutateWallet. Balance is authoritative in a wallet row; every change is
+      also appended to currency_ledger in the same transaction.
+
+  - state: player_state (non-money per-player game state — progress, quests, mascots, upgrades)
+    owned_by: Save/Persistence (updatePlayer chokepoint)
+    established_by: ADR-0005
+    note: >
+      Stored as a JSONB column (player_state.data) with schema_version, mutated
+      only via the LOCKED updatePlayer(id, mutate) path (SELECT FOR UPDATE +
+      mutate + UPDATE). Money is NOT part of this state — wallet is relational,
+      mutated only via ADR-0004 mutateWallet. Cross-player sort keys (e.g.
+      leaderboard_score) are promoted to indexed relational columns, not JSONB.
+
+  - state: leaderboard_scores (per-game current-best score + display stats)
+    owned_by: Leaderboard (read-only consumer) / written by each mini-game's reward-credit transaction
+    established_by: ADR-0012
+    note: >
+      Generic leaderboard_scores(player_id, game_id, score, achieved_at,
+      display_stats) table — replaces ADR-0005's original singular
+      player.leaderboard_score column. One row per (player_id, game_id),
+      current-best-only. A new mini-game is a data-only event, never a
+      migration. Third canonical-lock-order leg alongside player_state/wallet
+      when a run is both scoreable and reward-granting.
+
+interfaces:
+  - name: IDeterministicRng
+    established_by: ADR-0001
+    definition: |
+      C# interface in SharedSimCore.dll (.NET Standard 2.1, no UnityEngine deps).
+      Seed(ulong seed, int algorithmVersion); NextUInt32(); NextFloat01().
+      Implementation: Pcg32Rng (algorithm_version = 1).
+    referenced_by:
+      - super-ricochet.md (seeded RNG for row/coin/power-up spawn rolls)
+      - anti-cheat-replay-verification.md (Tier-2 replay determinism requirement)
+
+  - name: replay-verifier CLI contract
+    established_by: ADR-0001
+    definition: |
+      Self-contained .NET CLI executable, invoked as a short-lived child
+      process by the Node.js backend per Tier-2 check.
+      stdin (JSON): { seed, algorithmVersion, inputs }
+      stdout (JSON): { simulatedResult, ok }
+      Non-zero exit / stderr / timeout -> verifier failure -> fail-open path.
+    referenced_by:
+      - anti-cheat-replay-verification.md (Tier-2 replay verification)
+
+  - name: IDeterministicPhysics2D
+    established_by: ADR-0002
+    definition: |
+      C# interface in SharedSimCore.dll (.NET Standard 2.1, no UnityEngine deps).
+      AdvanceFrame() (fixed sim timestep, internally distance-sub-steps by
+      remaining distance ≤ 0.5×ball_radius); Balls; ConsumeHitEvents()
+      (count-based, order not scored). Sole authority for scored ball physics.
+    referenced_by:
+      - super-ricochet.md (sub-stepped collision, min-vertical-velocity)
+      - boss-ai-damage-model.md (per-hit events, order-independent)
+      - anti-cheat-replay-verification.md (Tier-2 physics replay)
+
+  - name: Fix32
+    established_by: ADR-0002
+    definition: |
+      Q16.16 fixed-point value type (Int32 raw, Int64 multiply intermediates,
+      deterministic IntSqrt). The ONLY numeric type permitted in the scored
+      simulation path. Exact Q-format frozen by the ADR-0002 spike gate.
+      EXTENDED by ADR-0013: FromRatio (division) added for Quack Runner's
+      coordinate-space conversion — new surface not covered by ADR-0002's own
+      spike scope, needs its own narrow supplementary spike.
+
+  - name: IRunnerCollision (Fix32Rect + Overlaps)
+    established_by: ADR-0013
+    definition: |
+      Quack Runner's duck-vs-obstacle AABB overlap test, extended into
+      SharedSimCore using Fix32 (never float). Overlaps() is a plain Int32
+      comparison (bit-identical by construction, no spike needed).
+      ObstacleSpeedFix32PerSecond(rawSpeed) = Fix32.FromRatio(rawSpeed, 600),
+      recomputed fresh every frame (not cached), then multiplied by FRAME_DT
+      for the per-frame Y-delta. Includes an engineering safety net: a
+      per-frame displacement exceeding a configured maximum is clamped for
+      collision-testing and flagged mode=degraded, rather than silently
+      allowing an unbounded-speed skip-through.
+    referenced_by:
+      - quack-runner.md (Core Rule 2, collision determinism)
+      - obstacle-spawn-difficulty-ramp-runner.md (Open Question 4)
+
+  - name: RicochetSpawnRolls (integer cumulative-threshold rolls) + BrickHpTable
+    established_by: ADR-0014
+    definition: |
+      Super Ricochet's row-spawn (spawn_density), coin-spawn, and power-up-spawn
+      decisions are each an integer cumulative threshold out of Resolution=10000,
+      compared against NextUInt32() % Resolution — never a float comparison.
+      spawn_density's constants are exact multiples of 1/10000 (4500/300/7500),
+      reformulated with zero precision loss and no Fix32 needed (unchecked
+      arithmetic, matching ADR-0001's overflow-wraparound convention). brick_hp_roll
+      (ceil(pow(random(),1.6) x max_brick_hp)) is replaced by BrickHpTable: an
+      offline-precomputed, largest-remainder-apportioned cumulative-weight table
+      per distinct max_brick_hp, checked in as generated C# source compiled
+      directly into SharedSimCore.dll (same-DLL guarantee, no separate data
+      asset), with a CI golden-file check against the offline generator. Roll
+      order per turn is pinned: row-spawn, then (only if a row spawned) 7
+      brick-HP rolls left-to-right, then coin-spawn, then power-up-spawn —
+      1 draw on a no-spawn turn, 10 on a spawn turn, never ambiguous.
+    referenced_by:
+      - level-difficulty-config-ricochet.md (spawn_density flagged determinism risk)
+      - super-ricochet.md (Rule 3, Rule 7-9, brick_hp_roll formula)
+
+  - name: ISecureTokenStore
+    established_by: ADR-0003
+    definition: |
+      C# interface: Save(token) / TryLoad(out token) / Clear(). Platform-
+      agnostic seam for on-device session-token storage. Native impls:
+      iOS Keychain (Swift), Android Keystore-backed (Kotlin). Editor-only
+      in-memory mock (un-shippable). Runtime selector fails closed on an
+      unknown platform (throws — never defaults to plaintext/in-memory).
+    referenced_by:
+      - account-auth.md (persist the 7-day JWT across launches; logout Clear())
+
+  - name: mutateWallet (+ two-path credit API)
+    established_by: ADR-0004
+    definition: |
+      Server-side (Node/TS). Single multi-leg chokepoint mutateWallet(playerId,
+      legs[], idemKey, source) applying N legs in ONE transaction. Leg kinds:
+      creditMultiplied (coins, ×(1+coinValueLevel)) | creditFlat (coins|gems,
+      raw) | debit (coins|gems, never-negative). The multiplier is applied ONLY
+      in the creditMultiplied leg; legs are never combined.
+    referenced_by:
+      - currency-system.md (Rules 2/3/4/6, double-spend + malformed-amount edges)
+      - anti-cheat-replay-verification.md (amounts pre-validated upstream)
+
+  - name: Analytics.Emit + /events ingest
+    established_by: ADR-0006
+    definition: |
+      Client API Analytics.Emit(name, params) — cheap, non-blocking, enqueues to
+      an in-memory queue then a durable buffer. Backend /events batch endpoint —
+      idempotent ingest, dedups by client eventId, records server received_at.
+      Event shape: {eventId, name, timestamp, playerId|deviceId, sessionId, seq,
+      schemaVersion, appVersion, params}.
+    referenced_by:
+      - analytics-event-tracking.md (buffer/flush/dedup/no-PII rules)
+
+  - name: verification_job queue + replay worker
+    established_by: ADR-0007
+    definition: |
+      Postgres-backed job queue (verification_job) consumed by a warm pool of
+      .NET SharedSimCore worker processes via SELECT ... FOR UPDATE SKIP LOCKED.
+      Lifecycle: pending → claimed(worker_id, lease_epoch, lease_expires) →
+      done(match|mismatch) | dead_letter. Atomic claim also reclaims expired
+      leases; terminal writes fenced by lease_epoch; UNIQUE(run_id) flag.
+    referenced_by:
+      - anti-cheat-replay-verification.md (Tier-2 async flag-only verification)
+
+  - name: HubNavigator
+    established_by: ADR-0009
+    definition: |
+      Single client-side authority for current-screen state (Hub / mini-game /
+      modal, exactly one active). Lives on a never-deactivated persistent root
+      (with auth observer + aggregation coroutines), separate from the
+      deactivatable Hub-view root (camera/EventSystem/AudioListener/UI). Owns
+      debounced nav, cache-first aggregation, auth-expiry routing.
+    referenced_by:
+      - shared-hub.md (navigation/orchestration)
+      - hub-ui.md (presentation built on it)
+
+  - name: client SQLite durable store + serialized DB-access layer
+    established_by: ADR-0010
+    definition: |
+      One embedded SQLite DB (WAL, one owned connection behind a serialized
+      access layer). Tables: cached_state (last-known-good, playerId-keyed,
+      server-wins overwrite), analytics_buffer (ADR-0006), offline_queue
+      (playerId-scoped, ordered, remove-after-ack, idempotent by run-ID).
+      Tokens are NOT here (Keychain/Keystore, ADR-0003).
+    referenced_by:
+      - save-persistence.md (client cache + offline queue, Rules 5-8)
+      - analytics-event-tracking.md (durable buffer)
+
+  - name: BossDamageModel
+    established_by: ADR-0011
+    definition: |
+      Deterministic boss HP/defeat state machine INSIDE SharedSimCore (not a
+      MonoBehaviour). boss_hp from Level/Difficulty Config (≥1); each frame
+      boss_hp -= accumulated ConsumeHitEvents() count (1 hit = 1 damage,
+      decoupled from brick HP); win at hp≤0 checked at frame boundary BEFORE
+      the danger-line loss. Client renders HP bar/VFX from the same events
+      (visual-only).
+    referenced_by:
+      - boss-ai-damage-model.md (damage/defeat state machine)
+      - super-ricochet.md (frame-boundary win/loss resolution)
+
+forbidden_patterns:
+  - pattern: "UnityEngine.Random or System.Random used anywhere in gameplay-affecting or RNG-critical code"
+    established_by: ADR-0001
+    reason: >
+      Neither is guaranteed bit-identical across platforms/engine or .NET
+      versions, which breaks Anti-Cheat Tier-2 replay verification. Use
+      SharedSimCore.Pcg32Rng (IDeterministicRng) instead.
+    enforcement: >
+      COMPILE-TIME (upgraded 2026-07-11, stronger than the grep-check
+      originally planned): Assets/Scripts/SharedSimCore/SharedSimCore.asmdef
+      sets "noEngineReferences": true, which excludes the UnityEngine.dll/
+      UnityEditor.dll default references entirely — a `using UnityEngine;`
+      inside this assembly fails to compile. UnityEngine.Random is therefore
+      structurally unreachable from SharedSimCore, not just discouraged.
+      System.Random is still only a review-time convention (no compiler
+      guard for it) — a Roslyn analyzer remains open work if stronger
+      enforcement is wanted there.
+
+  - pattern: "Persistent networked microservice for Tier-2 replay verification"
+    established_by: ADR-0001
+    reason: >
+      Considered and rejected in favor of a stateless CLI invoked as a
+      short-lived child process, to avoid a new deployment target, health-check
+      surface, and network auth boundary for a narrow, stateless computation.
+    enforcement: "Design-time — flag if a future ADR proposes reintroducing this"
+
+  - pattern: "float / double anywhere in the scored simulation path"
+    established_by: ADR-0002
+    reason: >
+      IEEE-754 single/double precision is not guaranteed bit-identical across
+      iOS-ARM64 and x86 server CPUs; a discrete hit/miss disagreement forks the
+      trajectory and diverges unboundedly, which tolerance_units CANNOT absorb.
+      Scored physics must use Fix32 fixed-point. Float is allowed ONLY for
+      display/rendering (kinematic MovePosition, render interpolation), never
+      fed back into scored state.
+    enforcement: "CI grep-check / Roslyn analyzer on SharedSimCore scored path (not yet implemented)"
+
+  - pattern: "Unity physics (Rigidbody2D dynamic simulation, or UnityEngine.LowLevelPhysics2D) as gameplay-outcome authority"
+    established_by: ADR-0002
+    reason: >
+      Neither can run in the server-side verification CLI, so neither can own
+      the replayable outcome. Unity physics is permitted only in a kinematic,
+      visual-only role driven from SharedSimCore.
+    enforcement: "Design-time + code review"
+
+  - pattern: "Wall-clock / elapsed-seconds timing in scored gameplay logic"
+    established_by: ADR-0002
+    reason: >
+      Determinism requires a clock both client and server agree on. All
+      time-bounded rules (e.g. the 12s volley cap = 720 sim frames @60Hz) are
+      counted in integer sim frames, never wall-clock, or a client stutter/
+      focus-loss would desync the server replay.
+    enforcement: "Code review — scored logic references frame index, not Time.time"
+
+  - pattern: "float/double anywhere in Quack Runner's scored collision path (duck/obstacle position, dimensions, overlap test)"
+    established_by: ADR-0013
+    reason: >
+      Same class of risk ADR-0002 closed for Ricochet: a discrete hit/miss
+      branch fork cannot be partially absorbed by tolerance_units. Extends
+      the existing float-ban to a second mini-game's collision math.
+    enforcement: "Code review + CI test-vector coverage"
+
+  - pattern: "Advancing an obstacle's Y position by a per-second rate without multiplying by FRAME_DT"
+    established_by: ADR-0013
+    reason: >
+      A real bug caught during this ADR's own independent review: conflating
+      a per-second rate with a per-frame delta is a 60x speed error at 60Hz,
+      immediately false-ing any 'no tunnelling risk' assumption.
+    enforcement: "Code review + frame-rate sanity test at multiple t values"
+
+  - pattern: "float/double, or NextFloat01() comparison, in any Super Ricochet spawn-generation decision (row-spawn, coin-spawn, power-up-spawn, brick-HP roll)"
+    established_by: ADR-0014
+    reason: >
+      Same discrete-branch-fork risk ADR-0002 closed for collision and
+      ADR-0013 closed for Runner's collision, applied to spawn generation.
+      Extends the existing float-ban to a category ADR-0002's own Decision
+      text never literally covered, closing a gap this session's
+      /design-review flagged but did not resolve.
+    enforcement: "Code review + CI test-vector coverage (ADR-0014 Validation Criteria)"
+
+  - pattern: "Shipping BrickHpTable (or any future table of this kind) as a separately-packaged data asset instead of generated source compiled into SharedSimCore.dll"
+    established_by: ADR-0014
+    reason: >
+      A separately-packaged asset lets client and server build pipelines pick
+      up different regenerated bytes for the same max_brick_hp (different
+      machine/OS/libm in the offline generation step) with nothing enforcing
+      they match. Compiling the checked-in generated source directly into the
+      shared DLL reuses the same "same compiled binary" guarantee ADR-0001
+      already relies on for Pcg32Rng.
+    enforcement: "Code review + CI golden-file check (regenerate-and-diff against checked-in source)"
+
+  - pattern: "Gating coin-spawn/power-up-spawn/brick-HP rolls inconsistently on the row-spawn roll's outcome"
+    established_by: ADR-0014
+    reason: >
+      A real ambiguity caught during this ADR's own independent review: its
+      first draft's prose and Architecture Diagram disagreed on whether these
+      rolls are conditional, which would silently desync the number of
+      NextUInt32() draws consumed per turn between two differently-reading
+      implementations. Pinned: all three are skipped entirely (not
+      rolled-and-discarded) on a turn where no row spawns.
+    enforcement: "Code review + a test asserting exactly 1 draw/no-spawn-turn and 10 draws/spawn-turn"
+
+  - pattern: "Letting obstacleSpeed(t) grow unbounded without a per-frame-displacement safety net in SharedSimCore"
+    established_by: ADR-0013
+    reason: >
+      obstacle-spawn-difficulty-ramp-runner.md's obstacleSpeed(t) has no cap;
+      per-frame displacement eventually exceeds obstacle/duck height at some
+      reachable t, producing a genuine, Tier-2-replayable skip-through
+      exploit (unlimited survival + coin farming). The engineering safety
+      net (clamp + mode=degraded) is mandatory regardless of whether the
+      GDD-level cap (routed to that GDD) has landed yet.
+    enforcement: "Code review + large-t test forcing the safety net to engage"
+
+  - pattern: "PlayerPrefs (or any plaintext on-disk store) used for a secret, credential, or auth token"
+    established_by: ADR-0003
+    reason: >
+      PlayerPrefs is plaintext and readable on rooted/jailbroken devices or via
+      local backup. Secrets go in iOS Keychain / Android Keystore via
+      ISecureTokenStore only.
+    enforcement: "CI grep for PlayerPrefs in auth code + code review"
+
+  - pattern: "Selecting an in-memory / mock ISecureTokenStore in a shipped player build"
+    established_by: ADR-0003
+    reason: >
+      A silent fall-through to an in-memory store would persist the bearer
+      token unprotected while appearing to work. The mock lives in an
+      Editor-only assembly (un-shippable) and the runtime selector fails
+      closed (throws) on an unknown platform.
+    enforcement: "Editor-only asmdef / #if UNITY_EDITOR + fail-closed selector"
+
+  - pattern: "Logging or crash-reporting the Authorization header / raw token value"
+    established_by: ADR-0003
+    reason: >
+      A token scrubbed into logs or a crash/analytics SDK payload defeats
+      secure storage. Given no server revocation, such a leak is valid until
+      expiry.
+    enforcement: "Scrub Authorization from logging/crash SDKs + review check"
+
+  - pattern: "Combining collected-coins (multiplied) and flat-bonus amounts into a single credit call"
+    established_by: ADR-0004
+    reason: >
+      The Coin Value multiplier must touch ONLY the collected-coins term.
+      Combining them re-introduces the reward double-dip (e.g. 5×270 instead of
+      120). Use separate creditMultiplied and creditFlat legs.
+    enforcement: "Two-path leg API + code review"
+
+  - pattern: "Application-level read-modify-write, or in-process-mutex-only, for currency balance atomicity"
+    established_by: ADR-0004
+    reason: >
+      Neither serializes across multiple server instances. Never-negative must
+      be enforced at the store via a conditional atomic UPDATE (WHERE coins >=
+      amount) inside a transaction.
+    enforcement: "Code review + concurrency test"
+
+  - pattern: "Freshly-generated (per-attempt) idempotency keys for currency mutations"
+    established_by: ADR-0004
+    reason: >
+      Idempotency keys must derive from the operation (run-submission id, IAP
+      receipt id) so a retry reuses the same key and cannot double-credit. A
+      fresh UUID per attempt defeats dedupe.
+    enforcement: "API contract + review"
+
+  - pattern: "Mutating currency through the generic Save/Persistence updatePlayer(id, mutate) chokepoint"
+    established_by: ADR-0005
+    reason: >
+      updatePlayer is a whole-record locked read-modify-write; money needs
+      ADR-0004's column-level guards, idempotency, and ledger. Wallet columns
+      live OUTSIDE player_state.data so currency isn't reachable from the
+      generic mutator. Money → mutateWallet only.
+    enforcement: "Schema separation + code review"
+
+  - pattern: "Network/file I/O inside a updatePlayer mutator function"
+    established_by: ADR-0005
+    reason: >
+      The mutator runs while a row lock (SELECT FOR UPDATE) and a pooled DB
+      connection are held; blocking on I/O throttles concurrency. Mutators must
+      be pure and fast.
+    enforcement: "Code review"
+
+  - pattern: "Storing a cross-player / leaderboard sort key inside JSONB player_state"
+    established_by: ADR-0005
+    reason: >
+      Top-N over a JSONB field is a full scan + sort per call. Cross-player
+      query/sort keys must be indexed relational columns (e.g. leaderboard_score).
+    enforcement: "Schema review + EXPLAIN check"
+
+  - pattern: "Acquiring the wallet update before the player_state row lock in a composed transaction"
+    established_by: ADR-0005
+    reason: >
+      Opposite lock-acquisition orders across paths cause ABBA deadlocks.
+      Canonical order: SELECT player_state FOR UPDATE FIRST, then guarded wallet
+      UPDATE, in every composed op.
+    enforcement: "Code review + concurrency/deadlock test"
+
+  - pattern: "Acquiring the leaderboard_scores upsert before player_state or wallet in a composed transaction (any transaction touching 2+ of the three)"
+    established_by: ADR-0012
+    reason: >
+      Extends ADR-0005's two-leg canonical lock order to three: player_state
+      FOR UPDATE, then guarded wallet UPDATE, then leaderboard_scores upsert,
+      always in that order, in ANY transaction touching 2+ of these — not only
+      the run-submission reward-credit chokepoint. Applies to future writers
+      too (admin score-correction, season-reset batch jobs, account-merge).
+    enforcement: "Code review + three-leg concurrency/deadlock test"
+
+  - pattern: "Writing the leaderboard_scores upsert outside the same transaction as the reward-credit legs it accompanies"
+    established_by: ADR-0012
+    reason: >
+      The automatic replay-safety this leg gets (a retried operation rolls
+      back before any leg runs) only holds while the write stays inside the
+      transaction. Moving it to a post-commit call silently drops that
+      protection — standalone idem_key checking would then be mandatory.
+    enforcement: "Code review"
+
+  - pattern: "Populating leaderboard_scores.achieved_at from a client-supplied timestamp"
+    established_by: ADR-0012
+    reason: >
+      Rule 6's tie-break is earliest achieved_at; a client-controlled value
+      would let clock skew or manipulation unfairly win ties. Server now() only,
+      matching the Tier-1-clamped-value-only treatment already required for score.
+    enforcement: "Code review"
+
+  - pattern: "Client emitting server-authoritative events (currency_earned/spent, purchase_completed, quest_claimed, mascot_acquired, streak_claimed, mascot_equipped)"
+    established_by: ADR-0006
+    amended_by: ADR-0006/ADR-0004/ADR-0005 annotations (2026-07-18) — added streak_claimed, mascot_equipped
+    reason: >
+      These are emitted once, server-side, from the shared analytics_outbox table
+      (exactly-once, unspoofable). A client also emitting them double-counts KPIs
+      and lets a modified client fake economy/state events. Client emits only
+      client-observable events (app_open, session_start, level/run start+complete,
+      purchase_initiated, screen views). The outbox is written by whichever
+      server-authoritative chokepoint made the change: mutateWallet (ADR-0004)
+      for currency events AND streak_claimed (a creditFlat claim); updatePlayer
+      (ADR-0005) for non-money player-state events, mascot_equipped being the first.
+    enforcement: "Client Emit allowlist excludes server-owned names + review"
+
+  - pattern: "Per-event analytics HTTP (no batching)"
+    established_by: ADR-0006
+    reason: "Network chatter + battery drain; GDD Rule 2 requires batches (20 / 30s / on-background)."
+    enforcement: "Code review"
+
+  - pattern: "Trusting the client-supplied timestamp for KPI cohorting (D1/D7/D30)"
+    established_by: ADR-0006
+    reason: >
+      Device clocks are skewable/manipulable. Cohort on server received_at; keep
+      client timestamp only for intra-session ordering via seq.
+    enforcement: "Server-side cohorting on received_at"
+
+  - pattern: "Embedding a third-party analytics SDK in the client"
+    established_by: ADR-0006
+    reason: >
+      First-party transport keeps data ownership + no-PII/GDPR control; data
+      leaves the device only to our /events endpoint. Server may fan out to a
+      third-party tool later without a client dependency.
+    enforcement: "Design-time + dependency review"
+
+  - pattern: "Removing/evicting buffered events by list position/index instead of eventId"
+    established_by: ADR-0006
+    reason: >
+      The buffer shifts between assembling a batch and acking it; index-based
+      removal/eviction drops the wrong event → silent loss. Always key by eventId;
+      never evict the in-flight batch.
+    enforcement: "Code review + concurrency test"
+
+  - pattern: "Tier-2 replay verification clawing back / adjusting a granted reward"
+    established_by: ADR-0007
+    reason: >
+      Anti-cheat GDD Rule 6 is flag-only: Tier-1 clamp governs the reward at
+      submission; a Tier-2 mismatch only raises a fraud flag → human review.
+      Clawback would punish float-drift/outdated-client false-positives.
+      Supersedes ADR-0001's clawback wording.
+    enforcement: "Design-time; Tier-2 has no write path to the wallet"
+
+  - pattern: "Crediting the reward and enqueueing the verification job in separate transactions"
+    established_by: ADR-0007
+    reason: >
+      A post-commit enqueue failure leaves a rewarded-but-never-verified run.
+      The verification_job insert must be in the SAME transaction as the
+      mutateWallet credit (outbox).
+    enforcement: "Code review + injected-failure test"
+
+  - pattern: "Writing a verification job's terminal state without checking the lease_epoch fence"
+    established_by: ADR-0007
+    reason: >
+      A slow (not crashed) job whose lease expired and was reclaimed would
+      otherwise double-write terminal state → double flag/analytics. Only the
+      current lease_epoch holder may write terminal state.
+    enforcement: "WHERE lease_epoch = :held on terminal UPDATE + UNIQUE(run_id)"
+
+  - pattern: "Per-enqueue COUNT(*) to measure queue depth for shedding"
+    established_by: ADR-0007
+    reason: "A synchronous count on every submission races and adds hot-path load; use a cached/approximate depth gauge."
+    enforcement: "Code review"
+
+  - pattern: "UGUI EventSystem using the legacy StandaloneInputModule"
+    established_by: ADR-0008
+    reason: >
+      Unity 6 defaults to the new Input System, with which StandaloneInputModule
+      is incompatible — UI receives ZERO touches. Use InputSystemUIInputModule
+      (+ EnhancedTouch).
+    enforcement: "Scene/prefab review + on-device touch test"
+
+  - pattern: "Leaving Raycast Target enabled on non-interactive UGUI Graphics"
+    established_by: ADR-0008
+    reason: "Highest-value UGUI mobile CPU waste — the raycaster walks every raycastable graphic per touch. Disable on all text/decorative images."
+    enforcement: "Review + UI audit"
+
+  - pattern: "Using stencil Mask, or Layout Groups/ContentSizeFitter on dynamic content, in UGUI"
+    established_by: ADR-0008
+    reason: >
+      Mask breaks batching (extra draw calls, undercuts ≤150 budget) — use
+      RectMask2D. Layout Groups/ContentSizeFitter force a rebuild on every
+      change — worst on the HUD/lists that update often; position manually or pool.
+    enforcement: "Review + rebuild profiling"
+
+  - pattern: "Computing Screen.safeArea only in Start/OnEnable"
+    established_by: ADR-0008
+    reason: >
+      Safe area/orientation/resolution can change at runtime; a Start-only
+      SafeArea component is the classic shipped notch bug. Recompute on change
+      (cache+compare each frame).
+    enforcement: "Review + rotate/resize on-device test"
+
+  - pattern: "Mixing UI Toolkit widgets inside a UGUI screen"
+    established_by: ADR-0008
+    reason: >
+      UI Toolkit is deferred; if introduced later it must be a WHOLE data-heavy
+      screen via the ADR-0008 gate, never widgets mixed within a UGUI screen.
+    enforcement: "Design-time gate + review"
+
+  - pattern: "Placing HubNavigator / aggregation coroutines under a GameObject root that gets SetActive(false)"
+    established_by: ADR-0009
+    reason: >
+      Deactivating a root stops its coroutines and Update. HubNavigator/auth
+      observer live on a never-deactivated persistent root, separate from the
+      deactivatable Hub-view root.
+    enforcement: "Scene/prefab structure review"
+
+  - pattern: "Leaving the Hub's Camera / EventSystem / AudioListener enabled while a mini-game scene is active"
+    established_by: ADR-0009
+    reason: >
+      Additive scenes → dual EventSystem (flaky input), dual AudioListener
+      (broken audio), dual camera (overdraw/wrong output). Disable Hub's on
+      mini-game activate + SetActiveScene(minigame); reverse on return.
+    enforcement: "Code review + on-device single-EventSystem/AudioListener/camera check"
+
+  - pattern: "Unloading an Addressables-loaded scene with SceneManager.UnloadScene"
+    established_by: ADR-0009
+    reason: >
+      Mixing SceneManager.UnloadScene with an Addressables-loaded scene leaks.
+      Unload via Addressables.UnloadSceneAsync on the stored SceneInstance
+      handle; also release asset handles + Resources.UnloadUnusedAssets.
+    enforcement: "Code review + 50x enter/exit memory-stability test"
+
+  - pattern: "Holding more than one mini-game scene resident at a time"
+    established_by: ADR-0009
+    reason: "Mobile memory budget; GDD Rule 4. One mini-game additive scene resident, released on exit."
+    enforcement: "Code review + memory test"
+
+  - pattern: "Storing the session token in the client cache/SQLite DB"
+    established_by: ADR-0010
+    reason: "Tokens live in Keychain/Keystore (ADR-0003). The cache DB holds display/game state + queued actions only, never credentials."
+    enforcement: "Review + token-absent test"
+
+  - pattern: "Applying a reward optimistically to the client cache before server confirmation"
+    established_by: ADR-0010
+    reason: >
+      Cache is display-only, never authoritative for rewards (save-persistence
+      Rule 7). Offline reward actions are queued (never shown as granted) until
+      the server confirms.
+    enforcement: "Code review + offline test"
+
+  - pattern: "Removing an offline-queue entry before a confirmed server ack"
+    established_by: ADR-0010
+    reason: "Remove-after-ack gives exactly-once; a lost ack re-sends (idempotent no-op). Remove-then-send loses an action on send failure."
+    enforcement: "Code review + lost-ack test"
+
+  - pattern: "Subsystems opening their own SQLite connections / no WAL"
+    established_by: ADR-0010
+    reason: >
+      Off-thread analytics flush + main-thread cache/queue on separate
+      connections → SQLITE_BUSY. All access through one owned connection behind
+      a serialized layer, WAL enabled.
+    enforcement: "Code review + concurrency flush-storm test"
+
+  - pattern: "Discarding the client cache/queue on a guest→account link"
+    established_by: ADR-0010
+    reason: >
+      Linking preserves the same playerId + progress (account-auth.md). Cache/
+      queue carry over (re-key in a txn only if an impl ever mints a new id).
+      Discard applies to logout / true account SWITCH only.
+    enforcement: "Code review + guest-link test"
+
+  - pattern: "Client-authoritative boss HP / defeat state"
+    established_by: ADR-0011
+    reason: >
+      Win/loss is a replayed scored outcome (ADR-0007). Boss HP/defeat lives in
+      the deterministic SharedSimCore so it's bit-reproducible and unspoofable.
+    enforcement: "Code review + replay test vector"
+
+  - pattern: "Boss damage reading a brick's HP/value"
+    established_by: ADR-0011
+    reason: >
+      Every hit deals exactly 1 boss damage decoupled from brick HP (boss-ai
+      GDD Core Rule 1, deliberate). Decrement by hit COUNT only.
+    enforcement: "Code review"
+
+  - pattern: "Per-sub-step loss termination preempting the frame-end boss-win check"
+    established_by: ADR-0011
+    reason: >
+      Win must take priority over a same-frame loss. Super Ricochet must latch
+      the danger-line condition as a frame flag and resolve loss at the frame
+      boundary AFTER boss-damage apply / win check — never terminate mid-frame.
+    enforcement: "Cross-ADR constraint on super-ricochet impl + same-frame test"
+
+  - pattern: "Client emitting boss_defeated / boss-reward events"
+    established_by: ADR-0011
+    reason: "Server-authoritative (ADR-0006/0007); creditFlat bonus via ADR-0004. Client emission would double-count / be spoofable."
+    enforcement: "Client Emit allowlist + review"
+
+api_decisions:
+  - decision: "RNG algorithm: PCG32 (algorithm_version = 1)"
+    established_by: ADR-0001
+    reason: "Canonical, well-documented reference implementation; straightforward to test-vector."
+
+  - decision: "SharedSimCore targets .NET Standard 2.1"
+    established_by: ADR-0001
+    reason: >
+      Unity IL2CPP/Mono compatibility baseline. No Span<T>/unsafe/heavy
+      reflection, to avoid AOT-compilation divergence between the Unity
+      client (iOS IL2CPP) and the standalone CLI runtime.
+
+  - decision: "All PRNG arithmetic wrapped in explicit `unchecked` blocks"
+    established_by: ADR-0001
+    reason: >
+      Guarantees identical integer-overflow wraparound behavior regardless
+      of each side's project-level overflow-checking settings.
+
+  - decision: "Super Ricochet scored physics uses Q16.16 fixed-point (Fix32), not float"
+    established_by: ADR-0002
+    reason: "Bit-exact cross-platform → tolerance_units can be 0 for this path (see sync note)."
+
+  - decision: "Sub-stepping driven by REMAINING DISTANCE (advance min(0.5×ball_radius, remaining)), not a per-frame count"
+    established_by: ADR-0002
+    reason: >
+      Preserves the half-ball-radius tunnelling distance-invariant even if a
+      bounce or min-vertical-velocity nudge changes speed magnitude mid-frame.
+
+  - decision: "Fixed 60Hz simulation timestep with a fixed-timestep accumulator (spiral-of-death clamped) + display-only render interpolation"
+    established_by: ADR-0002
+    reason: "Decouples render rate from the deterministic sim; sim advances only in whole FrameDt steps keyed to integer frame indices."
+
+  - decision: "High-level Rigidbody2D in Kinematic mode (interpolation off) for VISUAL ball rendering only"
+    established_by: ADR-0002
+    reason: >
+      Chosen over the new UnityEngine.LowLevelPhysics2D (Box2D v3) because Unity
+      is not the outcome authority here, so the mature/well-documented
+      high-level API wins and the low-level API's determinism claims are moot.
+
+  - decision: "ADR-0002 gated by a BLOCKING spike (prove ARM64-IL2CPP == x86 CLI byte-identical incl. signed-unchecked overflow + IntSqrt) before Accepted; fallback = Alternative D statistical anti-cheat"
+    established_by: ADR-0002
+    reason: "Bounds the custom-deterministic-physics-engine risk; on-device byte-identity can only be proven empirically, not on paper."
+
+  - decision: "iOS token storage: Keychain, kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly + ThisDeviceOnly (or tighter WhenUnlocked if no locked-state network call)"
+    established_by: ADR-0003
+    reason: "Background-while-locked access + excluded from backups + no device migration; ThisDeviceOnly prevents iCloud leakage."
+
+  - decision: "Android token storage: Keystore-wrapped AES-GCM key (or Tink), app-private encrypted blob — NOT androidx.security EncryptedSharedPreferences (deprecated)"
+    established_by: ADR-0003
+    reason: "Keystore key is hardware-backed where TEE/StrongBox present, software fallback on low-end API 25; EncryptedSharedPreferences is deprecated by Google."
+
+  - decision: "ISecureTokenStore editor mock lives in an Editor-only assembly; runtime selector fails closed on unknown platform"
+    established_by: ADR-0003
+    reason: "Makes the insecure mock physically un-shippable and prevents a silent plaintext fall-through."
+
+  - decision: "Currency never-negative enforced by a store-level conditional UPDATE (WHERE coins >= amount RETURNING), READ COMMITTED sufficient"
+    established_by: ADR-0004
+    reason: "Row-lock re-evaluation makes it concurrency-safe without SERIALIZABLE or explicit SELECT FOR UPDATE."
+
+  - decision: "Operation-level idempotency via INSERT currency_op ON CONFLICT(idem_key) DO NOTHING; replay ⇒ rollback + fresh full-wallet SELECT"
+    established_by: ADR-0004
+    reason: "Bare unique-violation aborts the txn; ON CONFLICT is the only correct exactly-once pattern here."
+
+  - decision: "Wallet upsert for new players: INSERT wallet ON CONFLICT(player_id) DO UPDATE"
+    established_by: ADR-0004
+    reason: "A plain UPDATE affects 0 rows when the wallet row doesn't exist yet, silently dropping the credit."
+
+  - decision: "Currency balance column + append-only currency_ledger (one row/leg) + currency_op (one row/operation)"
+    established_by: ADR-0004
+    reason: "Idempotency + IAP-grade audit/provenance + reconciliation without full event-sourcing replay cost."
+
+  - decision: "Currency analytics (currency_earned/spent) via a transactional outbox, dispatched at-least-once keyed by op_id"
+    established_by: ADR-0004
+    reason: "Fire-and-forget after commit loses events on a crash between COMMIT and emit."
+
+  - decision: "The analytics_outbox table is shared and written by BOTH server chokepoints: mutateWallet (ADR-0004) for currency events + streak_claimed; updatePlayer (ADR-0005) for non-money player-state events, mascot_equipped being the first"
+    established_by: ADR-0006/ADR-0004/ADR-0005 annotations (2026-07-18)
+    reason: >
+      Closes login-streak.md Open Q4 and mascot-gallery-equip-ui.md Open Q2. Both
+      GDDs loosely routed their new event to 'ADR-0004's outbox'; correct only for
+      streak_claimed (its claim credits currency via a creditFlat leg, so it rides
+      mutateWallet). mascot_equipped has no currency change and rides updatePlayer's
+      transaction (ADR-0005) writing the same shared outbox table. ADR-0006 §5 is the
+      authoritative event-ownership split; this is the first exercise of ADR-0006's
+      GDD-proposes-events governance (Open Q2), each event declaring its emission site.
+
+  - decision: "Server persistence: PostgreSQL, hybrid schema — relational for money + cross-player queries, JSONB (player_state.data) for evolving per-player-only state"
+    established_by: ADR-0005
+    reason: "Money needs real columns for ADR-0004 guards; evolving game state benefits from schema-flexible JSONB without a migration per field."
+
+  - decision: "Generic updatePlayer implemented as LOCKED read-modify-write (SELECT FOR UPDATE + mutate + UPDATE) in one transaction; money excepted to mutateWallet"
+    established_by: ADR-0005
+    reason: "Locked RMW is safe against lost updates; reconciles GDD Rule 3 with ADR-0004's rejection of UNLOCKED RMW for money."
+
+  - decision: "Data-access layer: query builder / raw parameterized SQL (Knex/pg), no heavy ORM"
+    established_by: ADR-0005
+    reason: "ADR-0004's conditional-update/ON-CONFLICT/multi-leg SQL reads cleanest as explicit parameterized SQL; injection-safe by construction."
+
+  - decision: "Schema via versioned, ordered, code-reviewed SQL migrations; fresh schema (no prod players); optional dev-only JSON import"
+    established_by: ADR-0005
+    reason: "No live players yet — not a zero-downtime cutover; migrations are forward-only files, not ad-hoc ALTERs."
+
+  - decision: "Composed (wallet + player_state) operations: canonical lock order + whole-operation idempotency gated on shared idem_key"
+    established_by: ADR-0005
+    reason: "Prevents ABBA deadlock and prevents a retried composed op from double-applying the JSONB state leg while the money leg self-dedupes."
+
+  - decision: "currency_ledger gains a denormalized player_id column + (player_id, created_at) index, written in the same mutateWallet transaction as the rest of the ledger row"
+    established_by: ADR-0012
+    reason: "getPlayerLedger/getReconciliationSummary need a cheap player-scoped index scan, not a join through currency_op on every call."
+
+  - decision: "Schema migration adding a NOT NULL column to a table with existing rows: add nullable → backfill → SET NOT NULL → index, never a single ADD COLUMN...NOT NULL statement"
+    established_by: ADR-0012
+    reason: "A single-statement NOT NULL add fails immediately against any pre-existing row with no DEFAULT — a general Postgres migration discipline, not specific to this one column."
+
+  - decision: "Leaderboard schema: generic leaderboard_scores(player_id, game_id, score, achieved_at, display_stats) table, current-best-only, replacing the singular player.leaderboard_score column"
+    established_by: ADR-0012
+    reason: "A new mini-game becomes a data-only event (new game_id value), never a schema migration; display_stats JSONB recovers per-game display fields the score alone can't (Runner's non-invertible sum)."
+
+  - decision: "Leaderboard's canonical lock order extends ADR-0005's two legs to three: player_state FOR UPDATE, then guarded wallet UPDATE, then leaderboard_scores upsert — fixed order in ANY transaction touching 2+ of the three, not only the reward-credit chokepoint"
+    established_by: ADR-0012
+    reason: "Leaderboard's score write shares a transaction with reward crediting (leaderboard.md Rule 4); a third leg needs the same fixed-order discipline ADR-0005 established for two, generalized to any future composed writer."
+
+  - decision: "Analytics transport: first-party — durable client buffer → our /events batch endpoint; optional SERVER-side fan-out to 3rd-party tools"
+    established_by: ADR-0006
+    reason: "Data ownership + no-PII/GDPR control; no vendor SDK on device; reuses ADR-0005 store."
+
+  - decision: "Analytics delivery: at-least-once, single-flight flush, remove-after-2xx-ack by eventId, server dedups by eventId"
+    established_by: ADR-0006
+    reason: "Durable across kill without loss; lost-ack resend is deduped, not double-counted."
+
+  - decision: "Analytics durability boundary = synchronous persist to durable log on OnApplicationPause; on-background is persist+next-launch-reflush, NOT a guaranteed send"
+    established_by: ADR-0006
+    reason: "Mobile OS suspends the player loop fast; UnityWebRequest can't reliably complete at pause, so persistence (not the network round-trip) is the survives-kill boundary."
+
+  - decision: "Analytics sessions: sessionId = client UUID minted at foreground; server closes sessions by inactivity/heartbeat (session_end is best-effort only)"
+    established_by: ADR-0006
+    reason: "A hard kill means session_end may never fire; session-length KPIs computed server-side from timestamps + received_at."
+
+  - decision: "Analytics buffer: cap 500, FIFO-drop-oldest by eventId, excluding the in-flight batch; batch 20 / flush 30s"
+    established_by: ADR-0006
+    reason: "GDD tuning; id-keyed eviction avoids dropping the wrong (or in-flight) event."
+
+  - decision: "Anti-cheat reward model: Tier-1 clamp governs reward (synchronous); Tier-2 replay is async + FLAG-ONLY (no clawback)"
+    established_by: ADR-0007
+    reason: "Matches anti-cheat GDD Rule 6; avoids false-positive harm. Supersedes ADR-0001's clawback wording."
+
+  - decision: "Tier-2 coverage: risk-based (100% high-value/leaderboard/flagged + sampled remainder, anomaly-driven p-bump), not 100%"
+    established_by: ADR-0007
+    reason: "Bounds re-sim CPU (answers anti-cheat GDD Open Q1) while covering economically-meaningful runs."
+
+  - decision: "Replay execution: warm .NET SharedSimCore worker pool on a Postgres queue (SELECT..FOR UPDATE SKIP LOCKED), atomic claim+reclaim, lease_epoch fencing, poison-job max_attempts→dead_letter"
+    established_by: ADR-0007
+    reason: "Refines ADR-0001 spawn-per-check to avoid cold-start at scale; no networked service, no new infra; exactly-once terminal writes."
+
+  - decision: "Reward credit + verification-job enqueue committed in one transaction (outbox); capacity shedding is risk-based → saturated degrades to Tier-1-only + ALERT"
+    established_by: ADR-0007
+    reason: "No rewarded-but-unverified runs; degradation never affects rewards, only fraud-signal coverage, and never silent (GDD edge)."
+
+  - decision: "UI system: UGUI (Canvas) primary for BOTH Hub and in-game HUD; UI Toolkit deferred (allowed later only for one whole data-heavy screen via gate)"
+    established_by: ADR-0008
+    reason: "One mental model, mature, best fit for juicy gameplay-coupled HUD, lowest risk with no UI specialist; coexistence-later preserved."
+
+  - decision: "EventSystem = InputSystemUIInputModule (+ EnhancedTouch); Canvas Scaler Scale-With-Screen-Size + SafeArea component recomputing on change; TMP default"
+    established_by: ADR-0008
+    reason: "New Input System is Unity 6 default (StandaloneInputModule = zero touches); safe-area + scaling correctness across notched mobile densities."
+
+  - decision: "UGUI perf discipline for ≤150 draw calls: static/dynamic canvas split (no over-split), Raycast Target off on non-interactive, RectMask2D not Mask, no Layout Groups on dynamic, atlases, event-driven HUD"
+    established_by: ADR-0008
+    reason: "Atlases+split alone don't hit the budget; these are the load-bearing UGUI mobile perf items."
+
+  - decision: "Hub navigation: persistent Hub scene + Addressables ADDITIVE mini-game scene load/unload (one resident, local Addressables MVP); modals = in-Hub UGUI panels"
+    established_by: ADR-0009
+    reason: "Instant Hub return + mobile memory (release on exit); modals instant/underneath; Addressables path per CLAUDE.md, remote later = config change."
+
+  - decision: "Hub uses two GameObject roots (persistent-authority vs deactivatable-view) + SetActiveScene(minigame) on activate; cache-first non-blocking aggregation; 300ms debounce (last-wins pre-commit) + nav-lock (ignore post-commit); auth-expiry closes modal+unloads+routes to login"
+    established_by: ADR-0009
+    reason: "Keeps navigator/coroutines alive; correct additive-scene ownership; GDD edges (bg-fail→cached, rapid-tap→one, expiry→login)."
+
+  - decision: "Client durable store: single embedded SQLite (WAL + serialized single-connection), shared by cached_state + analytics_buffer + offline_queue; integrity_check on open → recreate on corruption"
+    established_by: ADR-0010
+    reason: "Transactional cache/queue/buffer in one OS-native store; resolves the shared client-storage open-item; avoids SQLITE_BUSY and corrupt-file limp-on."
+
+  - decision: "Client cache = last-known-good, read-first + server-wins full overwrite, display-only; offline queue = idempotent-or-block, remove-after-ack, server-revalidated, 24h + size cap, playerId-scoped"
+    established_by: ADR-0010
+    reason: "save-persistence Rules 5-8; exactly-once via idempotent run-ID + remove-after-ack; no optimistic reward; cross-account safe."
+
+# --- Cross-ADR open items (unresolved, do not silently close) ---
+open_items:
+  - item: tolerance_units_reconciliation
+    raised_by: ADR-0002
+    affects: [ADR-0001, anti-cheat-replay-verification.md]
+    detail: >
+      ADR-0001 + the Anti-Cheat GDD justify a nonzero tolerance_units (0–5) as
+      absorbing float-to-int rounding in an "otherwise-identical deterministic
+      simulation." ADR-0002 makes Super Ricochet's scored physics BIT-EXACT
+      (fixed-point), which invalidates that justification for this mini-game's
+      physics path. Not silently changed — routed to the Anti-Cheat GDD owner:
+      either set tolerance to 0 for the physics path, or keep a small tolerance
+      strictly as defense-in-depth for any display-derived values that leak
+      into a submission.
+
+  - item: auth_token_revocation_and_ttl
+    raised_by: ADR-0003
+    affects: [account-auth.md]
+    detail: >
+      Secure storage (ADR-0003) is the ONLY defense against a stolen token
+      because account-auth.md has no server-side revocation endpoint and no
+      refresh token; a leaked 7-day JWT is valid until expiry. ADR-0003 scoped
+      this out deliberately. Routed to a future Auth ADR + the Account/Auth GDD
+      owner: consider a revocation endpoint and/or shorter access-token TTL +
+      refresh token. Sibling transport risk: enforce TLS / consider cert
+      pinning (a MITM-stolen token is as damaging as a storage-stolen one).
+
+  - item: currency_starting_grant_and_ledger_retention
+    raised_by: ADR-0004
+    affects: [currency-system.md]
+    detail: >
+      (1) currency-system.md Open Q1: does Currency System own a new-player
+      starting-balance grant, or onboarding? Routed to GDD owner. (2) currency_
+      ledger retention/archival policy must be defined before long-term live-ops
+      (not a launch blocker). (3) IAP receipt validation depth is the future IAP
+      ADR's job; ADR-0004 only provides provenance via ledger source + idem_key.
+
+  - item: persistence_backend_gates_multi_instance
+    raised_by: ADR-0004
+    resolved_by: ADR-0005
+    status: RESOLVED
+    affects: [save-persistence.md]
+    detail: >
+      ADR-0004's atomicity contract requires real store transactions. RESOLVED
+      by ADR-0005, which adopts PostgreSQL as the transactional store (wallet/
+      ledger/op relational, guarded conditional updates). Multi-instance is no
+      longer blocked once ADR-0005 is implemented; the single-instance JSON-file
+      prototype remains valid only for local/dev single-instance runs.
+
+  - item: reward_model_flag_only
+    raised_by: ADR-0007
+    supersedes_wording_in: ADR-0001
+    status: RESOLVED
+    affects: [ADR-0001, anti-cheat-replay-verification.md]
+    detail: >
+      ADR-0007 adopts the anti-cheat GDD's flag-only reward model (Tier-1
+      governs reward; Tier-2 mismatch only flags → human review; NO clawback).
+      ADR-0001's Decision pt 4 said "clawback"; annotated in ADR-0001 as
+      superseded (note kept, not silently rewritten). The fail-open PRINCIPLE
+      in ADR-0001 still holds; only the clawback mechanism is retracted.
+
+  - item: client_durable_local_storage_api
+    raised_by: [ADR-0006, "save-persistence.md Open Q1"]
+    resolved_by: ADR-0010
+    status: RESOLVED
+    affects: [analytics-event-tracking.md, save-persistence.md]
+    detail: >
+      RESOLVED by ADR-0010: one embedded SQLite DB (WAL + serialized single
+      connection) is the shared client durable store for cached_state +
+      analytics_buffer (ADR-0006) + offline_queue. Concrete plugin + IL2CPP AOT
+      compat to confirm at implementation.
+
+  - item: currency_ledger_player_id_denormalization
+    raised_by: "currency-ledger-transaction-log.md Core Rule 2"
+    resolved_by: ADR-0012
+    status: RESOLVED
+    affects: [ADR-0004, currency-ledger-transaction-log.md]
+    detail: >
+      ADR-0004's currency_ledger had no player_id column, requiring a join
+      through currency_op to scope by player. RESOLVED by ADR-0012: a
+      denormalized player_id column + (player_id, created_at) index, written
+      in the same mutateWallet transaction, backfilled via a corrected
+      nullable-then-SET-NOT-NULL migration sequence.
+
+  - item: leaderboard_schema_per_game
+    raised_by: "leaderboard.md Core Rule 9"
+    resolved_by: ADR-0012
+    status: RESOLVED
+    affects: [ADR-0005, leaderboard.md]
+    detail: >
+      ADR-0005 locked a singular player.leaderboard_score column, written
+      before Quack Runner established separate per-game boards. RESOLVED by
+      ADR-0012: a generic leaderboard_scores(player_id, game_id, score,
+      achieved_at, display_stats) table, current-best-only, replacing the
+      singular column, plus extending ADR-0005's canonical lock order to a
+      third leg for any composed transaction touching player_state/wallet/
+      leaderboard_scores.
+
+  - item: runner_collision_determinism
+    raised_by: "obstacle-spawn-difficulty-ramp-runner.md Core Rule 6 / quack-runner.md Open Question 6"
+    resolved_by: ADR-0013
+    status: RESOLVED
+    affects: [ADR-0002, quack-runner.md, obstacle-spawn-difficulty-ramp-runner.md]
+    detail: >
+      Neither GDD had an ADR governing whether Runner's duck-vs-obstacle AABB
+      overlap test was cross-platform deterministic. RESOLVED by ADR-0013:
+      Fix32 (ADR-0002's type) reused for position/dimension state; Overlaps()
+      is an exact Int32 comparison (no spike needed); Fix32.FromRatio (new
+      surface) gets its own narrow supplementary spike.
+
+  - item: runner_obstacle_speed_uncapped_exploit
+    raised_by: "ADR-0013's own independent review (2026-07-17)"
+    status: OPEN
+    affects: [obstacle-spawn-difficulty-ramp-runner.md]
+    detail: >
+      obstacleSpeed(t) = 250 + floor(t/5)x50 grows without bound. Confirmed
+      (not just suspected) that per-frame displacement eventually exceeds
+      obstacle/duck height at some reachable t, producing a genuine,
+      Tier-2-replayable skip-through — the same unbounded-growth bug class
+      already found and fixed for Ricochet's boss_hp/max_brick_hp, applied
+      here to Runner. ADR-0013 adds an engineering safety net (clamp +
+      mode=degraded) but the actual fix (capping obstacleSpeed(t), mirroring
+      the Ricochet precedent) is the ramp GDD's own required action — no
+      specific cap value proposed here, since it needs real obstacle/duck
+      dimension data this ADR/registry doesn't own. NOT YET actioned in the
+      GDD itself as of this entry.
+
+  - item: ui_toolkit_gate_trigger_screen
+    raised_by: ADR-0008
+    affects: [hub-ui.md]
+    detail: >
+      UGUI is primary; UI Toolkit is deferred behind a gate (whole data-heavy
+      screen only, cost consciously accepted). Which future screen (large shop/
+      mascot-collection browser) — if any — actually justifies invoking the gate
+      is unknown until that scope firms up. Also: exact Canvas Scaler reference
+      resolution + match value + supported aspect matrix pending /ux-design.

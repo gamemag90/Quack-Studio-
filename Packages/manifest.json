@@ -1,0 +1,8 @@
+{
+  "dependencies": {
+    "com.unity.test-framework": "1.4.5",
+    "com.unity.textmeshpro": "3.0.9",
+    "com.unity.2d.sprite": "1.0.0",
+    "com.unity.inputsystem": "1.11.2"
+  }
+}
