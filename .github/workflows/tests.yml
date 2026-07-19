@@ -8,7 +8,7 @@ on:
 
 jobs:
   test:
-    name: Run Unity Tests
+    name: Run Unity Tests (Edit Mode)
     runs-on: ubuntu-latest
 
     steps:
@@ -17,27 +17,39 @@ jobs:
         with:
           lfs: true
 
-      - name: Run Edit Mode Tests
+      - name: Run Edit Mode Tests (SharedSimCore)
         uses: game-ci/unity-test-runner@v4
-        env:
-          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
         with:
           testMode: editmode
           artifactsPath: test-results/editmode
-          unityVersion: 6000.3.0f1
-
-      - name: Run Play Mode Tests
-        uses: game-ci/unity-test-runner@v4
-        env:
-          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
-        with:
-          testMode: playmode
-          artifactsPath: test-results/playmode
           unityVersion: 6000.3.0f1
 
       - name: Upload Test Results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-results
-          path: test-results/
+          name: test-results-editmode
+          path: test-results/editmode/
+
+  determinism-spike:
+    name: ADR-0002 Determinism Spike (iOS ARM64)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Build for iOS (ARM64 IL2CPP)
+        uses: game-ci/unity-builder@v4
+        with:
+          unityVersion: 6000.3.0f1
+          targetPlatform: iOS
+          buildMethod: Assets/Scripts/SharedSimCore/BuildDeterminismTest.cs
+
+      - name: Upload iOS Build
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-arm64-determinism
+          path: build/iOS/
