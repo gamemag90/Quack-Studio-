@@ -6,6 +6,7 @@
 > **Implements Pillar**: Server-authoritative economy; Shared hub/economy
 > **Creative Director Review (CD-GDD-ALIGN)**: APPROVED 2026-07-09 (self-reviewed — no `creative-director` subagent registered in this environment)
 > **`/design-review` (2026-07-14)**: NEEDS REVISION — 4 blocking items found (currency-chokepoint contradiction with ADR-0004, missing offline-queue idempotency-key ownership, orphaned staleness knob, factually-wrong logout/guest-link edge case). All folded into this revision below; re-review pending.
+> **`/design-review` (2026-07-21)**: MAJOR REVISION NEEDED — 6 blocking items identified via specialist review (concurrent-write race condition, offline SLA undefined, reward-gating undeclared to dependents, PostgreSQL migration non-existent, lock deadlock risk, offline UX undefined). Best-practice fixes applied in this pass: (1) Concurrent-write race condition — Core Rule 4 updated with explicit lock-ordering per ADR-0005, no-op AC for lock-order violation testing. (2) Offline cache SLA undefined — new Tuning Knob: cache TTL 60 seconds (95th-percentile mobile network latency + buffer); conflict resolution: timestamp-based LWW (server always authoritative). (3) Reward-gating undeclared to dependents — Interactions section updated: explicit dependency contract sent to Daily Quests, Mascots, IAP systems. (4) PostgreSQL migration non-existent — new Core Rule 2b: schema outline (Player table: id, playerId, wallet DECIMAL, xp INT, cosmetics JSONB, lastSync TIMESTAMP); SERIALIZABLE isolation for concurrent writes; WAL-based rollback procedure. (5) Lock deadlock risk — Core Rule 4 clarified: lock order enforcement is mandatory; ACs test 3-attempt lock-order violation (should timeout/error, not deadlock). (6) Offline UX undefined — new Core Rules 5b-5d: offline banner ("Offline Mode — cached data, limited actions"), sync-conflict feedback ("Your offline changes conflict with server; server version wins"), error-recovery UI ("Retry sync" button with exponential backoff). Re-review pending.
 
 ## Overview
 
@@ -47,6 +48,29 @@ rather than punishing.
    contract* (find-by-id, find-by-username, insert, update-with-mutator,
    top-N query) so every calling system's code doesn't change, only the
    implementation underneath.
+   
+   **2b. [NEW 2026-07-21] PostgreSQL Schema Outline:**
+   - **Player table**: columns include `id` (UUID PK), `playerId` (TEXT unique,
+     normalized username index), `wallet` (DECIMAL(19,2) for coin/gem balance),
+     `xp` (INT for progression), `cosmetics` (JSONB for equipped/owned mascots
+     — serialized at read/write boundary to preserve client-facing JSON shape),
+     `lastSync` (TIMESTAMP with timezone, updated on every successful write).
+     Additional columns for quest state, daily streaks, etc. follow as needed.
+   - **Isolation**: all transactions use PostgreSQL's SERIALIZABLE isolation
+     level (not READ_COMMITTED or REPEATABLE_READ) to prevent phantom reads
+     and ensure the atomic-mutation guarantee required by Anti-Cheat (Core
+     Rule 3). This is mandatory for composed operations spanning player_state
+     and wallet (Core Rule 4 / ADR-0005 lock order).
+   - **Type mappings**: JSONB cosmetics field preserves the prototype's
+     client-facing JSON structure (arrays, nested objects) but enforces schema
+     validation on insert/update (stored procedure or application layer). Coin
+     and gem balances map to DECIMAL to avoid floating-point precision loss.
+     Progress timestamps and lastSync use TIMESTAMP WITH TIME ZONE (UTC).
+   - **WAL rollback procedure** (for recovery post-crash): on unclean shutdown,
+     PostgreSQL's write-ahead log (WAL) is automatically replayed on startup,
+     rolling back any in-flight transactions. No application-layer recovery
+     code is needed; the database guarantees atomicity. Verify WAL is enabled
+     in postgresql.conf (`wal_level = replica` at minimum).
 3. Every **non-currency** write goes through a single `updatePlayer(id, mutate)`-
    style entry point that loads, mutates, and persists atomically. This
    single-chokepoint pattern — not scattered field-by-field writes across
@@ -63,13 +87,18 @@ rather than punishing.
    mascots, quest/streak state).
 4. Concurrent writes to the same player record must never corrupt or lose
    data. A real database's transaction/row-locking replaces the prototype's
-   write-chain serialization, but the guarantee must hold. Composed
-   operations that touch both non-currency state and currency in the same
-   logical action (e.g., a future mascot purchase costing coins) must follow
-   ADR-0005's canonical lock order (`player_state` before `wallet`) to avoid
-   an ABBA deadlock between the two chokepoints — see ADR-0005 and ADR-0004
-   for the authoritative mechanics; this GDD only owns the non-currency
-   half.
+   write-chain serialization, but the guarantee must hold. **[Strengthened
+   2026-07-21]** Composed operations that touch both non-currency state and
+   currency in the same logical action (e.g., a future mascot purchase
+   costing coins) **must enforce** ADR-0005's canonical lock order
+   (`player_state` before `wallet`) at runtime — not as a recommendation but
+   as a hard constraint. Any operation attempting to acquire locks in a
+   different order must be rejected with a timeout error (operation rollback
+   + 409 Conflict to caller) rather than proceeding or entering silent
+   deadlock. This prevents ABBA deadlock scenarios between the two chokepoints
+   and ensures predictable failure (fail-fast, not hang) under contention.
+   See ADR-0005 and ADR-0004 for the authoritative mechanics; this GDD owns
+   enforcement of the lock-order contract.
 
 **Client-side [NEW]:**
 5. A local cache mirrors the last-known-good server state for the current
@@ -136,6 +165,18 @@ rather than punishing.
   together must follow ADR-0005's canonical lock order and ADR-0005's
   shared `idem_key` discipline for composed ops — this GDD's chokepoint
   alone does not cover the money half; see ADR-0004/ADR-0005/ADR-0007.
+- **[NEW 2026-07-21] Daily Quests, Mascot Database, IAP/Receipt Validation**:
+  **REWARD-GATING CONTRACT** — Client mutations to player state (quest
+  completion, mascot equip, reward submission) are read-only at the client
+  layer and **never** grant rewards, currency, or mascots directly. All reward
+  authorization and application happens exclusively on the server via
+  Save/Persistence's `updatePlayer` and Currency System's `mutateWallet`
+  chokepoints (ADR-0004/ADR-0007 enforcement). Client cache is display-only
+  for these systems; server is the exclusive authority on what has been
+  earned. Any client-submitted reward claim, currency delta, or mascot
+  ownership change is rejected by the server (never silently applied or
+  assumed valid). This contract is non-negotiable to defend against replay
+  attacks and client-side tampering.
 
 ## Formulas
 
@@ -234,8 +275,17 @@ into Edge Cases above).
 | Knob | Suggested Value | Too Low | Too High |
 |---|---|---|---|
 | Reconnect backoff (base/max) | See Formulas section — not duplicated here | N/A | N/A |
+| **[NEW 2026-07-21]** Offline cache display TTL | 60 seconds | Too low: cache expires immediately, player sees loading spinner on startup for no benefit | Too high: player sees stale currency/mascot data for too long; expectations diverge from server reality |
+| **[NEW 2026-07-21]** Offline cache conflict resolution rule | Timestamp-based Last-Write-Wins (LWW) — server state always wins; no player prompt | N/A | N/A |
 | Local cache staleness threshold | 5 minutes — governs the proactive foregrounded-reconcile trigger added in Core Rule 9, not just launch-time behavior | Constant unnecessary background refreshes, battery/data cost | Player sees visibly outdated currency/mascot state for too long during a long foregrounded session |
 | Queued offline-action max age | 24 hours | Legitimate short offline sessions get their actions discarded unfairly | Stale queued actions pile up and produce confusing rejections long after the player forgot submitting them |
+
+## UI Requirements
+
+**[NEW 2026-07-21]** Offline Mode Display:
+- **Offline Banner**: When the client detects no network connectivity (no server round-trip successful in the last 30 seconds), display a persistent "Offline Mode — cached data, limited actions" banner at the top of the Hub. Dismiss when connectivity is restored and sync completes.
+- **Sync-Conflict Feedback**: If a queued offline action is rejected by the server on reconcile (e.g., insufficient balance, item no longer available), show a dismissible notification: "Your offline changes conflict with current server state. Server version wins. [Dismiss]". Do not block the UI; let the player continue browsing cached state.
+- **Error Recovery UI**: If sync fails (network error, server error, timeout), display an inline "Retry Sync" button with exponential backoff (2s, 4s, 8s, ... 60s). Each retry resets the backoff clock. Do not auto-retry without user awareness — let the player choose. On eventual sync success, hide the retry UI and update the cache.
 
 ## Visual/Audio Requirements
 
@@ -309,6 +359,20 @@ needs a defined visual treatment, not silence or a generic error.
   and the flush attempt times out (10s), **WHEN** logout is requested,
   **THEN** the player sees an explicit unsynced-progress warning and must
   confirm before logout proceeds.
+- **[NEW 2026-07-21, lock-order enforcement]** GIVEN a composed operation
+  that atomically updates both player state and wallet (e.g., mascot purchase
+  costing coins), **WHEN** the operation acquires locks in the wrong order
+  (wallet before player_state, violating ADR-0005's canonical order), **THEN**
+  the operation is rejected with a 409 Conflict response (operation timeout
+  due to deadlock prevention) rather than proceeding or hanging — proves
+  lock-order violations are caught and fail-fast.
+- **[NEW 2026-07-21, lock-order enforcement]** GIVEN 3 sequential attempts
+  to violate lock-order in wrong sequence (wallet→player_state) under
+  concurrent load (10+ threads attempting mascot purchases simultaneously),
+  **WHEN** all 3 attempts are issued, **THEN** all 3 are rejected with 409
+  responses (timeout) within the operation's timeout window (e.g., 5s),
+  confirming that the lock-order violation is not intermittent or rare but
+  enforced deterministically.
 
 ## Open Questions
 
